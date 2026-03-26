@@ -6,6 +6,7 @@ import type { TaskGitAction } from "@/git-actions/build-task-git-action-prompt";
 import { useLinkedBacklogTaskActions } from "@/hooks/use-linked-backlog-task-actions";
 import { useProgrammaticCardMoves } from "@/hooks/use-programmatic-card-moves";
 import { useReviewAutoActions } from "@/hooks/use-review-auto-actions";
+import { getAutoStartableBacklogTaskIds } from "@/hooks/use-task-start-actions";
 import type { UseTaskSessionsResult } from "@/hooks/use-task-sessions";
 import type { RuntimeTaskSessionSummary, RuntimeTaskWorkspaceInfoResponse } from "@/runtime/types";
 import {
@@ -67,6 +68,8 @@ interface UseBoardInteractionsInput {
 		options?: SendTerminalInputOptions,
 	) => Promise<{ ok: boolean; message?: string }>;
 	readyForReviewNotificationsEnabled: boolean;
+	autoStartTasksEnabled: boolean;
+	maxConcurrentRunningTasks: number;
 	taskGitActionLoadingByTaskId: Record<string, TaskGitActionLoadingStateLike>;
 	runAutoReviewGitAction: (taskId: string, action: TaskGitAction) => Promise<boolean>;
 }
@@ -111,15 +114,20 @@ export function useBoardInteractions({
 	fetchTaskWorkspaceInfo,
 	sendTaskSessionInput,
 	readyForReviewNotificationsEnabled,
+	autoStartTasksEnabled,
+	maxConcurrentRunningTasks,
 	taskGitActionLoadingByTaskId,
 	runAutoReviewGitAction,
 }: UseBoardInteractionsInput): UseBoardInteractionsResult {
+	const boardRef = useRef(board);
 	const previousSessionsRef = useRef<Record<string, RuntimeTaskSessionSummary>>({});
 	const notificationPermissionPromptInFlightRef = useRef(false);
 	const moveToTrashLoadingByIdRef = useRef<Record<string, true>>({});
 	const pendingProgrammaticStartMoveCompletionByTaskIdRef = useRef<
 		Record<string, PendingProgrammaticStartMoveCompletion>
 	>({});
+	const autoStartReservedTaskIdsRef = useRef<Set<string>>(new Set());
+	const autoStartSuppressedTaskUpdatedAtByTaskIdRef = useRef<Record<string, number>>({});
 	const [moveToTrashLoadingById, setMoveToTrashLoadingById] = useState<Record<string, boolean>>({});
 	const {
 		handleProgrammaticCardMoveReady,
@@ -132,6 +140,17 @@ export function useBoardInteractions({
 		requestMoveTaskToTrashWithAnimation,
 		programmaticCardMoveCycle,
 	} = useProgrammaticCardMoves();
+
+	useEffect(() => {
+		boardRef.current = board;
+	}, [board]);
+
+	useEffect(() => {
+		if (!autoStartTasksEnabled) {
+			return;
+		}
+		autoStartSuppressedTaskUpdatedAtByTaskIdRef.current = {};
+	}, [autoStartTasksEnabled]);
 
 	const resolvePendingProgrammaticStartMove = useCallback((taskId: string, started: boolean) => {
 		const pending = pendingProgrammaticStartMoveCompletionByTaskIdRef.current[taskId];
@@ -282,6 +301,33 @@ export function useBoardInteractions({
 		});
 	}, [readyForReviewNotificationsEnabled]);
 
+	const getSuppressedAutoStartTaskIds = useCallback((currentBoard: BoardData): Set<string> => {
+		const backlogCards = currentBoard.columns.find((column) => column.id === "backlog")?.cards ?? [];
+		const nextSuppressedTaskUpdatedAtByTaskId: Record<string, number> = {};
+		const suppressedTaskIds = new Set<string>();
+
+		for (const card of backlogCards) {
+			const suppressedUpdatedAt = autoStartSuppressedTaskUpdatedAtByTaskIdRef.current[card.id];
+			if (suppressedUpdatedAt !== card.updatedAt) {
+				continue;
+			}
+			nextSuppressedTaskUpdatedAtByTaskId[card.id] = suppressedUpdatedAt;
+			suppressedTaskIds.add(card.id);
+		}
+
+		autoStartSuppressedTaskUpdatedAtByTaskIdRef.current = nextSuppressedTaskUpdatedAtByTaskId;
+		return suppressedTaskIds;
+	}, []);
+
+	const suppressAutomaticStartTask = useCallback((taskId: string) => {
+		const selection = findCardSelection(boardRef.current, taskId);
+		if (!selection || selection.column.id !== "backlog") {
+			delete autoStartSuppressedTaskUpdatedAtByTaskIdRef.current[taskId];
+			return;
+		}
+		autoStartSuppressedTaskUpdatedAtByTaskIdRef.current[taskId] = selection.card.updatedAt;
+	}, []);
+
 	const kickoffTaskInProgress = useCallback(
 		async (
 			task: BoardCard,
@@ -429,6 +475,75 @@ export function useBoardInteractions({
 		],
 	);
 
+	const requestAutoStartTasks = useCallback(
+		async (requestedTaskIds?: string[]): Promise<string[]> => {
+			if (!autoStartTasksEnabled) {
+				return [];
+			}
+
+			const currentBoard = boardRef.current;
+			const suppressedTaskIds = getSuppressedAutoStartTaskIds(currentBoard);
+			const taskIdsToAutoStart = getAutoStartableBacklogTaskIds({
+				board: currentBoard,
+				sessions,
+				maxConcurrentRunningTasks,
+				requestedTaskIds,
+				reservedTaskIds: autoStartReservedTaskIdsRef.current,
+				excludedTaskIds: suppressedTaskIds,
+			});
+			if (taskIdsToAutoStart.length === 0) {
+				return [];
+			}
+
+			for (const taskId of taskIdsToAutoStart) {
+				autoStartReservedTaskIdsRef.current.add(taskId);
+			}
+
+			maybeRequestNotificationPermissionForTaskStart();
+			const startedTaskIds: string[] = [];
+
+			try {
+				for (const [index, taskId] of taskIdsToAutoStart.entries()) {
+					const selection = findCardSelection(boardRef.current, taskId);
+					if (!selection || selection.column.id !== "backlog") {
+						autoStartReservedTaskIdsRef.current.delete(taskId);
+						continue;
+					}
+
+					const started = await startBacklogTaskWithAnimation(selection.card);
+					autoStartReservedTaskIdsRef.current.delete(taskId);
+
+					if (started) {
+						startedTaskIds.push(taskId);
+						delete autoStartSuppressedTaskUpdatedAtByTaskIdRef.current[taskId];
+					} else {
+						suppressAutomaticStartTask(taskId);
+					}
+
+					if (index < taskIdsToAutoStart.length - 1) {
+						await waitForProgrammaticCardMoveAvailability();
+					}
+				}
+			} finally {
+				for (const taskId of taskIdsToAutoStart) {
+					autoStartReservedTaskIdsRef.current.delete(taskId);
+				}
+			}
+
+			return startedTaskIds;
+		},
+		[
+			autoStartTasksEnabled,
+			getSuppressedAutoStartTaskIds,
+			maxConcurrentRunningTasks,
+			maybeRequestNotificationPermissionForTaskStart,
+			sessions,
+			startBacklogTaskWithAnimation,
+			suppressAutomaticStartTask,
+			waitForProgrammaticCardMoveAvailability,
+		],
+	);
+
 	useEffect(() => {
 		setBoard((currentBoard) => {
 			let nextBoard = currentBoard;
@@ -506,6 +621,13 @@ export function useBoardInteractions({
 		});
 	}, [programmaticCardMoveCycle, sessions, setBoard, setSelectedTaskId, tryProgrammaticCardMove]);
 
+	useEffect(() => {
+		if (!autoStartTasksEnabled) {
+			return;
+		}
+		void requestAutoStartTasks();
+	}, [autoStartTasksEnabled, board, requestAutoStartTasks, sessions]);
+
 	const { confirmMoveTaskToTrash, handleCreateDependency, handleDeleteDependency, requestMoveTaskToTrash } =
 		useLinkedBacklogTaskActions({
 			board,
@@ -513,10 +635,7 @@ export function useBoardInteractions({
 			setSelectedTaskId,
 			stopTaskSession,
 			cleanupTaskWorkspace,
-			maybeRequestNotificationPermissionForTaskStart,
-			kickoffTaskInProgress,
-			startBacklogTaskWithAnimation,
-			waitForBacklogStartAnimationAvailability: waitForProgrammaticCardMoveAvailability,
+			requestAutoStartTasks,
 		});
 
 	useEffect(() => {

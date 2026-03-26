@@ -1,7 +1,12 @@
 import { createTRPCProxyClient, httpBatchLink } from "@trpc/client";
 import type { Command } from "commander";
 
-import type { RuntimeBoardCard, RuntimeBoardDependency, RuntimeWorkspaceStateResponse } from "../core/api-contract.js";
+import type {
+	RuntimeBoardCard,
+	RuntimeBoardDependency,
+	RuntimeConfigResponse,
+	RuntimeWorkspaceStateResponse,
+} from "../core/api-contract.js";
 import { buildKanbanRuntimeUrl, getKanbanRuntimeOrigin } from "../core/runtime-endpoint.js";
 import {
 	addTaskDependency,
@@ -38,6 +43,44 @@ interface RuntimeWorkspaceMutationResult<T> {
 }
 
 type JsonRecord = Record<string, unknown>;
+
+function countRunningTaskSessions(state: RuntimeWorkspaceStateResponse): number {
+	return Object.values(state.sessions).filter((summary) => summary.state === "running").length;
+}
+
+function selectAutoStartReadyTaskIds(input: {
+	state: RuntimeWorkspaceStateResponse;
+	readyTaskIds: string[];
+	runtimeConfig: RuntimeConfigResponse;
+}): string[] {
+	if (!input.runtimeConfig.autoStartTasksEnabled) {
+		return [];
+	}
+
+	const remainingSlots = Math.max(
+		0,
+		input.runtimeConfig.maxConcurrentRunningTasks - countRunningTaskSessions(input.state),
+	);
+	if (remainingSlots === 0) {
+		return [];
+	}
+
+	const readyTaskIdSet = new Set(input.readyTaskIds);
+	const backlogCards = input.state.board.columns.find((column) => column.id === "backlog")?.cards ?? [];
+	const autoStartTaskIds: string[] = [];
+
+	for (const task of backlogCards) {
+		if (!readyTaskIdSet.has(task.id)) {
+			continue;
+		}
+		autoStartTaskIds.push(task.id);
+		if (autoStartTaskIds.length >= remainingSlots) {
+			break;
+		}
+	}
+
+	return autoStartTaskIds;
+}
 
 function toErrorMessage(error: unknown): string {
 	if (error instanceof Error && error.message.trim().length > 0) {
@@ -635,7 +678,15 @@ async function trashTaskById(input: {
 	}
 
 	const autoStartedTasks: JsonRecord[] = [];
-	for (const readyTaskId of mutation.value.readyTaskIds) {
+	const nextState = await input.runtimeClient.workspace.getState.query();
+	const runtimeConfig = await input.runtimeClient.runtime.getConfig.query();
+	const autoStartTaskIds = selectAutoStartReadyTaskIds({
+		state: nextState,
+		readyTaskIds: mutation.value.readyTaskIds,
+		runtimeConfig,
+	});
+
+	for (const readyTaskId of autoStartTaskIds) {
 		const started = await startTask({
 			cwd: input.cwd,
 			taskId: readyTaskId,

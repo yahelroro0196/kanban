@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 
+import type { RuntimeTaskSessionSummary } from "@/runtime/types";
 import { findCardSelection } from "@/state/board-state";
-import type { BoardData } from "@/types";
+import type { BoardData, BoardDependency } from "@/types";
 
 interface UseTaskStartActionsInput {
 	board: BoardData;
@@ -18,32 +19,87 @@ export interface UseTaskStartActionsResult {
 	handleStartAllBacklogTasksFromBoard: () => void;
 }
 
+interface GetAutoStartableBacklogTaskIdsInput {
+	board: BoardData;
+	sessions: Record<string, RuntimeTaskSessionSummary>;
+	maxConcurrentRunningTasks: number;
+	requestedTaskIds?: string[];
+	reservedTaskIds?: Iterable<string>;
+	excludedTaskIds?: Iterable<string>;
+}
+
 export function getStartableBacklogTaskIds(board: BoardData): string[] {
-	const allBacklogTasks = new Set<string>();
-	const allInProgressTasks = new Set<string>();
+	const backlogCards = board.columns.find((column) => column.id === "backlog")?.cards ?? [];
+	const inProgressCards = board.columns.find((column) => column.id === "in_progress")?.cards ?? [];
+	const backlogTaskIds = new Set(backlogCards.map((card) => card.id));
+	const inProgressTaskIds = new Set(inProgressCards.map((card) => card.id));
+	const dependencyByBacklogTaskId = new Map<string, BoardDependency>();
+
+	for (const dependency of board.dependencies) {
+		if (!dependencyByBacklogTaskId.has(dependency.fromTaskId)) {
+			dependencyByBacklogTaskId.set(dependency.fromTaskId, dependency);
+		}
+	}
+
 	const startableTaskIds: string[] = [];
+	for (const card of backlogCards) {
+		const dependency = dependencyByBacklogTaskId.get(card.id);
+		if (!dependency) {
+			startableTaskIds.push(card.id);
+			continue;
+		}
 
-	const backlogCards = board.columns.find((column) => column.id === "backlog")?.cards;
-	const inProgressTasks = board.columns.find((column) => column.id === "in_progress")?.cards;
-
-	backlogCards?.forEach((card) => {
-		allBacklogTasks.add(card.id);
-	});
-	inProgressTasks?.forEach((card) => {
-		allInProgressTasks.add(card.id);
-	});
-
-	backlogCards?.forEach((card) => {
-		const dependency = board.dependencies.find((d) => d.fromTaskId === card.id);
-		const isChildTaskInBacklog = dependency && allBacklogTasks.has(dependency.toTaskId);
-		const isChildTaskInProgress = dependency && allInProgressTasks.has(dependency.toTaskId);
-
-		if (!isChildTaskInBacklog && !isChildTaskInProgress) {
+		if (!backlogTaskIds.has(dependency.toTaskId) && !inProgressTaskIds.has(dependency.toTaskId)) {
 			startableTaskIds.push(card.id);
 		}
-	});
+	}
 
 	return startableTaskIds;
+}
+
+export function countRunningTaskSessions(sessions: Record<string, RuntimeTaskSessionSummary>): number {
+	return Object.values(sessions).filter((summary) => summary.state === "running").length;
+}
+
+export function getAutoStartableBacklogTaskIds({
+	board,
+	sessions,
+	maxConcurrentRunningTasks,
+	requestedTaskIds,
+	reservedTaskIds,
+	excludedTaskIds,
+}: GetAutoStartableBacklogTaskIdsInput): string[] {
+	const reservedTaskIdSet = new Set(reservedTaskIds ?? []);
+	const excludedTaskIdSet = new Set(excludedTaskIds ?? []);
+	const availableSlots = Math.max(
+		0,
+		maxConcurrentRunningTasks - countRunningTaskSessions(sessions) - reservedTaskIdSet.size,
+	);
+	if (availableSlots === 0) {
+		return [];
+	}
+
+	const requestedTaskIdSet = requestedTaskIds ? new Set(requestedTaskIds) : null;
+	const startableTaskIds = getStartableBacklogTaskIds(board);
+	const autoStartableTaskIds: string[] = [];
+
+	for (const taskId of startableTaskIds) {
+		if (reservedTaskIdSet.has(taskId)) {
+			continue;
+		}
+		if (excludedTaskIdSet.has(taskId)) {
+			continue;
+		}
+		if (requestedTaskIdSet && !requestedTaskIdSet.has(taskId)) {
+			continue;
+		}
+		autoStartableTaskIds.push(taskId);
+		if (autoStartableTaskIds.length >= availableSlots) {
+			break;
+		}
+	}
+
+	return autoStartableTaskIds;
 }
 
 export function useTaskStartActions({

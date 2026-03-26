@@ -57,38 +57,16 @@ interface HookSnapshot {
 	) => Promise<void>;
 }
 
-interface Deferred<T> {
-	promise: Promise<T>;
-	resolve: (value: T | PromiseLike<T>) => void;
-}
-
-function createDeferred<T>(): Deferred<T> {
-	let resolve!: (value: T | PromiseLike<T>) => void;
-	const promise = new Promise<T>((nextResolve) => {
-		resolve = nextResolve;
-	});
-	return { promise, resolve };
-}
-
 function HookHarness({
 	boardFactory,
 	onSnapshot,
-	kickoffTaskInProgress,
-	startBacklogTaskWithAnimation,
-	waitForBacklogStartAnimationAvailability,
+	requestAutoStartTasks,
 	stopTaskSession,
 	cleanupTaskWorkspace,
 }: {
 	boardFactory?: () => BoardData;
 	onSnapshot: (snapshot: HookSnapshot) => void;
-	kickoffTaskInProgress?: (
-		task: BoardCard,
-		taskId: string,
-		fromColumnId: "backlog" | "in_progress" | "review" | "trash",
-		options?: { optimisticMove?: boolean },
-	) => Promise<boolean>;
-	startBacklogTaskWithAnimation?: (task: BoardCard) => Promise<boolean>;
-	waitForBacklogStartAnimationAvailability?: () => Promise<void>;
+	requestAutoStartTasks?: (requestedTaskIds?: string[]) => Promise<string[]>;
 	stopTaskSession?: (taskId: string) => Promise<void>;
 	cleanupTaskWorkspace?: (taskId: string) => Promise<unknown>;
 }): null {
@@ -99,10 +77,7 @@ function HookHarness({
 		setSelectedTaskId: () => {},
 		stopTaskSession: stopTaskSession ?? (async () => {}),
 		cleanupTaskWorkspace: cleanupTaskWorkspace ?? (async () => null),
-		maybeRequestNotificationPermissionForTaskStart: () => {},
-		kickoffTaskInProgress: kickoffTaskInProgress ?? (async (_task: BoardCard, _taskId: string) => true),
-		startBacklogTaskWithAnimation,
-		waitForBacklogStartAnimationAvailability,
+		requestAutoStartTasks: requestAutoStartTasks ?? (async () => []),
 	});
 
 	useEffect(() => {
@@ -183,7 +158,7 @@ describe("useLinkedBacklogTaskActions", () => {
 
 	it("tracks how many linked tasks were auto-started when a parent task is trashed", async () => {
 		let latestSnapshot: HookSnapshot | null = null;
-		const kickoffTaskInProgress = vi.fn(async () => true);
+		const requestAutoStartTasks = vi.fn(async () => ["task-1", "task-3"]);
 		const boardFactory = () =>
 			createBoard([
 				{ id: "dep-1", fromTaskId: "task-1", toTaskId: "task-2", createdAt: 10 },
@@ -194,7 +169,7 @@ describe("useLinkedBacklogTaskActions", () => {
 			root.render(
 				<HookHarness
 					boardFactory={boardFactory}
-					kickoffTaskInProgress={kickoffTaskInProgress}
+					requestAutoStartTasks={requestAutoStartTasks}
 					onSnapshot={(snapshot) => {
 						latestSnapshot = snapshot;
 					}}
@@ -215,15 +190,13 @@ describe("useLinkedBacklogTaskActions", () => {
 			await initialSnapshot.confirmMoveTaskToTrash(reviewTask, initialSnapshot.board);
 		});
 
-		expect(kickoffTaskInProgress).toHaveBeenCalledTimes(2);
+		expect(requestAutoStartTasks).toHaveBeenCalledWith(["task-1", "task-3"]);
 		expect(trackTasksAutoStartedFromDependencyMock).toHaveBeenCalledWith(2);
 	});
 
-	it("uses animated backlog starts for dependency-unblocked tasks when available", async () => {
+	it("does not track dependency auto-start telemetry when no task was started", async () => {
 		let latestSnapshot: HookSnapshot | null = null;
-		const kickoffTaskInProgress = vi.fn(async () => true);
-		const startBacklogTaskWithAnimation = vi.fn(async (task: BoardCard) => task.id === "task-1");
-		const waitForBacklogStartAnimationAvailability = vi.fn(async () => {});
+		const requestAutoStartTasks = vi.fn(async () => []);
 		const boardFactory = () =>
 			createBoard([
 				{ id: "dep-1", fromTaskId: "task-1", toTaskId: "task-2", createdAt: 10 },
@@ -234,9 +207,7 @@ describe("useLinkedBacklogTaskActions", () => {
 			root.render(
 				<HookHarness
 					boardFactory={boardFactory}
-					kickoffTaskInProgress={kickoffTaskInProgress}
-					startBacklogTaskWithAnimation={startBacklogTaskWithAnimation}
-					waitForBacklogStartAnimationAvailability={waitForBacklogStartAnimationAvailability}
+					requestAutoStartTasks={requestAutoStartTasks}
 					onSnapshot={(snapshot) => {
 						latestSnapshot = snapshot;
 					}}
@@ -257,12 +228,8 @@ describe("useLinkedBacklogTaskActions", () => {
 			await initialSnapshot.confirmMoveTaskToTrash(reviewTask, initialSnapshot.board);
 		});
 
-		expect(startBacklogTaskWithAnimation).toHaveBeenCalledTimes(2);
-		expect(startBacklogTaskWithAnimation.mock.calls[0]?.[0]).toMatchObject({ id: "task-1" });
-		expect(startBacklogTaskWithAnimation.mock.calls[1]?.[0]).toMatchObject({ id: "task-3" });
-		expect(waitForBacklogStartAnimationAvailability).toHaveBeenCalledTimes(1);
-		expect(kickoffTaskInProgress).not.toHaveBeenCalled();
-		expect(trackTasksAutoStartedFromDependencyMock).toHaveBeenCalledWith(1);
+		expect(requestAutoStartTasks).toHaveBeenCalledWith(["task-1", "task-3"]);
+		expect(trackTasksAutoStartedFromDependencyMock).not.toHaveBeenCalled();
 	});
 
 	it("stops the main task session and its detail terminal shell when a task is trashed", async () => {
@@ -331,71 +298,4 @@ describe("useLinkedBacklogTaskActions", () => {
 		expect(cleanupTaskWorkspace).toHaveBeenCalledWith("task-2");
 	});
 
-	it("can queue the next dependency-unblocked animation before the previous start resolves", async () => {
-		let latestSnapshot: HookSnapshot | null = null;
-		const firstKickoff = createDeferred<boolean>();
-		const secondKickoff = createDeferred<boolean>();
-		const waitForSecondAnimation = createDeferred<void>();
-		const startBacklogTaskWithAnimation = vi.fn((task: BoardCard) => {
-			if (task.id === "task-1") {
-				return firstKickoff.promise;
-			}
-			return secondKickoff.promise;
-		});
-		const waitForBacklogStartAnimationAvailability = vi.fn(async () => {
-			await waitForSecondAnimation.promise;
-		});
-		const boardFactory = () =>
-			createBoard([
-				{ id: "dep-1", fromTaskId: "task-1", toTaskId: "task-2", createdAt: 10 },
-				{ id: "dep-2", fromTaskId: "task-3", toTaskId: "task-2", createdAt: 11 },
-			]);
-
-		await act(async () => {
-			root.render(
-				<HookHarness
-					boardFactory={boardFactory}
-					startBacklogTaskWithAnimation={startBacklogTaskWithAnimation}
-					waitForBacklogStartAnimationAvailability={waitForBacklogStartAnimationAvailability}
-					onSnapshot={(snapshot) => {
-						latestSnapshot = snapshot;
-					}}
-				/>,
-			);
-		});
-
-		if (latestSnapshot === null) {
-			throw new Error("Expected a hook snapshot.");
-		}
-		const initialSnapshot = latestSnapshot as HookSnapshot;
-		const reviewTask = initialSnapshot.board.columns.find((column) => column.id === "review")?.cards[0];
-		if (!reviewTask) {
-			throw new Error("Expected a review task.");
-		}
-
-		let movePromise: Promise<void> | null = null;
-		await act(async () => {
-			movePromise = initialSnapshot.confirmMoveTaskToTrash(reviewTask, initialSnapshot.board);
-			await Promise.resolve();
-		});
-
-		expect(startBacklogTaskWithAnimation).toHaveBeenCalledTimes(1);
-		expect(startBacklogTaskWithAnimation.mock.calls[0]?.[0]).toMatchObject({ id: "task-1" });
-
-		await act(async () => {
-			waitForSecondAnimation.resolve();
-			await Promise.resolve();
-		});
-
-		expect(startBacklogTaskWithAnimation).toHaveBeenCalledTimes(2);
-		expect(startBacklogTaskWithAnimation.mock.calls[1]?.[0]).toMatchObject({ id: "task-3" });
-
-		await act(async () => {
-			firstKickoff.resolve(true);
-			secondKickoff.resolve(true);
-			await movePromise;
-		});
-
-		expect(trackTasksAutoStartedFromDependencyMock).toHaveBeenCalledWith(2);
-	});
 });

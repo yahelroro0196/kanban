@@ -216,7 +216,7 @@ Notes:
 
 ## task trash
 
-Purpose: move a task or an entire column to \`trash\`, stop active sessions if needed, clean up task worktrees, and auto-start any linked backlog tasks that become ready.
+Purpose: move a task or an entire column to \`trash\`, stop active sessions if needed, clean up task worktrees, and mark linked backlog tasks as ready when dependencies are cleared.
 
 Command:
 \`${kanbanCommand} task trash (--task-id <task_id> | --column backlog|in_progress|review|trash) [--project-path <path>]\`
@@ -229,6 +229,7 @@ Parameters:
 Notes:
 - Provide exactly one of \`--task-id\` or \`--column\`.
 - \`task trash --column trash\` is a no-op for tasks already in trash.
+- If project auto-start is enabled and the project still has available running-task capacity, ready linked backlog tasks may auto-start up to that cap.
 
 ## task delete
 
@@ -262,7 +263,7 @@ Notes:
 - If both linked tasks are in backlog, Kanban preserves the order you pass: \`--task-id\` waits on \`--linked-task-id\`.
 - On the board, the dependency arrow points into the task that must finish first.
 - Once only one linked task remains in backlog, Kanban reorients the saved dependency so the backlog task is the waiting dependent task and the other task is the prerequisite.
-- When the prerequisite task finishes review and is moved to trash, the waiting backlog task becomes ready to start.
+- When the prerequisite task finishes review and is moved to trash, the waiting backlog task becomes ready to start, and Kanban may auto-start it if project auto-start is enabled and capacity is available.
 
 ## task unlink
 

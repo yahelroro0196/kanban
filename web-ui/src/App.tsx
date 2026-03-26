@@ -173,6 +173,8 @@ export default function App(): ReactElement {
 		prepareWaitForConnection: prepareWaitForTerminalConnectionReady,
 	} = useTerminalConnectionReady();
 	const readyForReviewNotificationsEnabled = runtimeProjectConfig?.readyForReviewNotificationsEnabled ?? true;
+	const autoStartTasksEnabled = runtimeProjectConfig?.autoStartTasksEnabled ?? false;
+	const maxConcurrentRunningTasks = runtimeProjectConfig?.maxConcurrentRunningTasks ?? 2;
 	const shortcuts = runtimeProjectConfig?.shortcuts ?? [];
 	const selectedShortcutLabel = useMemo(() => {
 		if (shortcuts.length === 0) {
@@ -592,6 +594,8 @@ export default function App(): ReactElement {
 		fetchTaskWorkspaceInfo,
 		sendTaskSessionInput,
 		readyForReviewNotificationsEnabled,
+		autoStartTasksEnabled,
+		maxConcurrentRunningTasks,
 		taskGitActionLoadingByTaskId,
 		runAutoReviewGitAction,
 	});

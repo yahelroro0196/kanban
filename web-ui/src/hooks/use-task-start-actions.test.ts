@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { getStartableBacklogTaskIds } from "@/hooks/use-task-start-actions";
+import {
+	countRunningTaskSessions,
+	getAutoStartableBacklogTaskIds,
+	getStartableBacklogTaskIds,
+} from "@/hooks/use-task-start-actions";
+import type { RuntimeTaskSessionSummary } from "@/runtime/types";
 import type { BoardCard, BoardData, BoardDependency } from "@/types";
 
 describe("getStartableBacklogTaskIds", () => {
@@ -37,6 +42,25 @@ describe("getStartableBacklogTaskIds", () => {
 		};
 	}
 
+	function createRunningSession(taskId: string): RuntimeTaskSessionSummary {
+		return {
+			taskId,
+			state: "running",
+			agentId: "codex",
+			workspacePath: "/tmp/repo",
+			pid: 1234,
+			startedAt: 1,
+			updatedAt: 1,
+			lastOutputAt: 1,
+			reviewReason: null,
+			exitCode: null,
+			lastHookAt: null,
+			latestHookActivity: null,
+			latestTurnCheckpoint: null,
+			previousTurnCheckpoint: null,
+		};
+	}
+
 	it("returns all backlog task ids when there are no dependencies", () => {
 		const board = createBoard({ backlogCards: [createCard("task-1"), createCard("task-2"), createCard("task-3")] });
 		expect(getStartableBacklogTaskIds(board)).toEqual(["task-1", "task-2", "task-3"]);
@@ -62,5 +86,61 @@ describe("getStartableBacklogTaskIds", () => {
 			inProgressCards: [createCard("task-b")],
 		});
 		expect(getStartableBacklogTaskIds(board)).toEqual([]);
+	});
+
+	it("counts only running task sessions toward the auto-start cap", () => {
+		expect(
+			countRunningTaskSessions({
+				"task-1": createRunningSession("task-1"),
+				"task-2": {
+					...createRunningSession("task-2"),
+					state: "awaiting_review",
+				},
+			}),
+		).toBe(1);
+	});
+
+	it("limits auto-start selection by remaining running-task capacity", () => {
+		const board = createBoard({
+			backlogCards: [createCard("task-1"), createCard("task-2"), createCard("task-3")],
+		});
+
+		expect(
+			getAutoStartableBacklogTaskIds({
+				board,
+				sessions: { "running-task": createRunningSession("running-task") },
+				maxConcurrentRunningTasks: 2,
+			}),
+		).toEqual(["task-1"]);
+	});
+
+	it("filters dependency-unblocked auto-start requests in backlog order", () => {
+		const board = createBoard({
+			backlogCards: [createCard("task-1"), createCard("task-2"), createCard("task-3")],
+		});
+
+		expect(
+			getAutoStartableBacklogTaskIds({
+				board,
+				sessions: {},
+				maxConcurrentRunningTasks: 2,
+				requestedTaskIds: ["task-3", "task-2"],
+			}),
+		).toEqual(["task-2", "task-3"]);
+	});
+
+	it("does not reselect reserved tasks while auto-start is already in flight", () => {
+		const board = createBoard({
+			backlogCards: [createCard("task-1"), createCard("task-2"), createCard("task-3")],
+		});
+
+		expect(
+			getAutoStartableBacklogTaskIds({
+				board,
+				sessions: {},
+				maxConcurrentRunningTasks: 2,
+				reservedTaskIds: ["task-1"],
+			}),
+		).toEqual(["task-2"]);
 	});
 });

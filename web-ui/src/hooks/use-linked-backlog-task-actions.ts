@@ -6,7 +6,6 @@ import { getDetailTerminalTaskId } from "@/hooks/use-terminal-panels";
 import {
 	addTaskDependency,
 	findCardSelection,
-	moveTaskToColumn,
 	removeTaskDependency,
 	trashTaskAndGetReadyLinkedTaskIds,
 } from "@/state/board-state";
@@ -25,25 +24,14 @@ export function useLinkedBacklogTaskActions({
 	setSelectedTaskId,
 	stopTaskSession,
 	cleanupTaskWorkspace,
-	maybeRequestNotificationPermissionForTaskStart,
-	kickoffTaskInProgress,
-	startBacklogTaskWithAnimation,
-	waitForBacklogStartAnimationAvailability,
+	requestAutoStartTasks,
 }: {
 	board: BoardData;
 	setBoard: Dispatch<SetStateAction<BoardData>>;
 	setSelectedTaskId: Dispatch<SetStateAction<string | null>>;
 	stopTaskSession: (taskId: string) => Promise<void>;
 	cleanupTaskWorkspace: (taskId: string) => Promise<unknown>;
-	maybeRequestNotificationPermissionForTaskStart: () => void;
-	kickoffTaskInProgress: (
-		task: BoardCard,
-		taskId: string,
-		fromColumnId: BoardColumnId,
-		options?: { optimisticMove?: boolean },
-	) => Promise<boolean>;
-	startBacklogTaskWithAnimation?: (task: BoardCard) => Promise<boolean>;
-	waitForBacklogStartAnimationAvailability?: () => Promise<void>;
+	requestAutoStartTasks: (requestedTaskIds?: string[]) => Promise<string[]>;
 }): {
 	handleCreateDependency: (fromTaskId: string, toTaskId: string) => void;
 	handleDeleteDependency: (dependencyId: string) => void;
@@ -122,45 +110,9 @@ export function useLinkedBacklogTaskActions({
 					: currentSelectedTaskId,
 			);
 
-			const readyTasks = trashed.readyTaskIds
-				.map((readyTaskId) => findCardSelection(trashed.board, readyTaskId)?.card ?? null)
-				.filter((readyTask): readyTask is BoardCard => readyTask !== null);
-
-			if (readyTasks.length > 0) {
-				maybeRequestNotificationPermissionForTaskStart();
-				let startedTaskCount = 0;
-				if (startBacklogTaskWithAnimation) {
-					const startedTaskPromises: Promise<boolean>[] = [];
-					for (const [index, readyTask] of readyTasks.entries()) {
-						startedTaskPromises.push(startBacklogTaskWithAnimation(readyTask));
-						if (index < readyTasks.length - 1) {
-							await waitForBacklogStartAnimationAvailability?.();
-						}
-					}
-					const startedTasks = await Promise.all(startedTaskPromises);
-					startedTaskCount = startedTasks.filter(Boolean).length;
-				} else {
-					setBoard((currentBoardState) => {
-						let nextBoardState = currentBoardState;
-						for (const readyTask of readyTasks) {
-							const moved = moveTaskToColumn(nextBoardState, readyTask.id, "in_progress", {
-								insertAtTop: true,
-							});
-							if (moved.moved) {
-								nextBoardState = moved.board;
-							}
-						}
-						return nextBoardState;
-					});
-					for (const readyTask of readyTasks) {
-						const started = await kickoffTaskInProgress(readyTask, readyTask.id, "backlog", {
-							optimisticMove: true,
-						});
-						if (started) {
-							startedTaskCount += 1;
-						}
-					}
-				}
+			if (trashed.readyTaskIds.length > 0) {
+				const startedTaskIds = await requestAutoStartTasks(trashed.readyTaskIds);
+				const startedTaskCount = startedTaskIds.length;
 				if (startedTaskCount > 0) {
 					trackTasksAutoStartedFromDependency(startedTaskCount);
 				}
@@ -171,13 +123,10 @@ export function useLinkedBacklogTaskActions({
 		},
 		[
 			cleanupTaskWorkspace,
-			kickoffTaskInProgress,
-			maybeRequestNotificationPermissionForTaskStart,
+			requestAutoStartTasks,
 			setBoard,
 			setSelectedTaskId,
-			startBacklogTaskWithAnimation,
 			stopTaskSession,
-			waitForBacklogStartAnimationAvailability,
 		],
 	);
 
