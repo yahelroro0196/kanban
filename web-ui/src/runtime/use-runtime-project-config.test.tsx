@@ -55,6 +55,8 @@ function createRuntimeConfigResponse(
 			},
 		],
 		shortcuts,
+		autoStartTasksEnabled: false,
+		maxConcurrentRunningTasks: 2,
 		clineProviderSettings: {
 			providerId: null,
 			modelId: null,

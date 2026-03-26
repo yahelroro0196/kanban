@@ -122,6 +122,8 @@ export function buildRuntimeConfigResponse(
 		detectedCommands,
 		agents,
 		shortcuts: runtimeConfig.shortcuts,
+		autoStartTasksEnabled: runtimeConfig.autoStartTasksEnabled,
+		maxConcurrentRunningTasks: runtimeConfig.maxConcurrentRunningTasks,
 		clineProviderSettings,
 		commitPromptTemplate: runtimeConfig.commitPromptTemplate,
 		openPrPromptTemplate: runtimeConfig.openPrPromptTemplate,

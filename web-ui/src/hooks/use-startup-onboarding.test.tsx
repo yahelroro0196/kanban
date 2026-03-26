@@ -14,6 +14,39 @@ vi.mock("@/runtime/runtime-config-query", () => ({
 
 type HookSnapshot = UseStartupOnboardingResult;
 
+function ensureLocalStorage(): Storage {
+	if (
+		typeof window.localStorage?.getItem === "function" &&
+		typeof window.localStorage?.setItem === "function" &&
+		typeof window.localStorage?.clear === "function"
+	) {
+		return window.localStorage;
+	}
+
+	const store = new Map<string, string>();
+	const nextStorage: Storage = {
+		get length() {
+			return store.size;
+		},
+		clear: () => {
+			store.clear();
+		},
+		getItem: (key) => store.get(key) ?? null,
+		key: (index) => Array.from(store.keys())[index] ?? null,
+		removeItem: (key) => {
+			store.delete(key);
+		},
+		setItem: (key, value) => {
+			store.set(key, value);
+		},
+	};
+	Object.defineProperty(window, "localStorage", {
+		configurable: true,
+		value: nextStorage,
+	});
+	return nextStorage;
+}
+
 function createRuntimeConfigResponse(selectedAgentId: RuntimeConfigResponse["selectedAgentId"]): RuntimeConfigResponse {
 	return {
 		selectedAgentId,
@@ -36,6 +69,8 @@ function createRuntimeConfigResponse(selectedAgentId: RuntimeConfigResponse["sel
 			},
 		],
 		shortcuts: [],
+		autoStartTasksEnabled: false,
+		maxConcurrentRunningTasks: 2,
 		clineProviderSettings: {
 			providerId: null,
 			modelId: null,
@@ -85,11 +120,11 @@ function HookHarness({
 
 describe("useStartupOnboarding", () => {
 	let container: HTMLDivElement;
-	let root: Root;
+	let root: Root | null = null;
 	let previousActEnvironment: boolean | undefined;
 
 	beforeEach(() => {
-		window.localStorage.clear();
+		ensureLocalStorage().clear();
 		saveRuntimeConfigMock.mockReset();
 		saveRuntimeConfigMock.mockResolvedValue(createRuntimeConfigResponse("codex"));
 		previousActEnvironment = (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean })
@@ -101,9 +136,12 @@ describe("useStartupOnboarding", () => {
 	});
 
 	afterEach(() => {
-		act(() => {
-			root.unmount();
-		});
+		if (root) {
+			act(() => {
+				root?.unmount();
+			});
+			root = null;
+		}
 		container.remove();
 		if (previousActEnvironment === undefined) {
 			delete (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT;
@@ -117,7 +155,7 @@ describe("useStartupOnboarding", () => {
 		let latestSnapshot: HookSnapshot | null = null;
 
 		await act(async () => {
-			root.render(
+			root!.render(
 				<HookHarness
 					currentProjectId={null}
 					runtimeProjectConfig={null}
@@ -143,7 +181,7 @@ describe("useStartupOnboarding", () => {
 		let latestSnapshot: HookSnapshot | null = null;
 
 		await act(async () => {
-			root.render(
+			root!.render(
 				<HookHarness
 					currentProjectId={null}
 					runtimeProjectConfig={createRuntimeConfigResponse("cline")}
@@ -172,7 +210,7 @@ describe("useStartupOnboarding", () => {
 		let latestSnapshot: HookSnapshot | null = null;
 
 		await act(async () => {
-			root.render(
+			root!.render(
 				<HookHarness
 					currentProjectId={null}
 					runtimeProjectConfig={null}
@@ -199,7 +237,7 @@ describe("useStartupOnboarding", () => {
 		let latestSnapshot: HookSnapshot | null = null;
 
 		await act(async () => {
-			root.render(
+			root!.render(
 				<HookHarness
 					currentProjectId={"project-1"}
 					runtimeProjectConfig={createRuntimeConfigResponse("cline")}
@@ -226,7 +264,7 @@ describe("useStartupOnboarding", () => {
 		let latestSnapshot: HookSnapshot | null = null;
 
 		await act(async () => {
-			root.render(
+			root!.render(
 				<HookHarness
 					currentProjectId={"project-1"}
 					runtimeProjectConfig={createRuntimeConfigResponse("codex")}

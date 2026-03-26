@@ -59,6 +59,8 @@ function createRuntimeConfigResponse(clineOverrides: Partial<RuntimeConfigRespon
 			},
 		],
 		shortcuts: [],
+		autoStartTasksEnabled: false,
+		maxConcurrentRunningTasks: 2,
 		clineProviderSettings: {
 			providerId: "cline",
 			modelId: "claude-sonnet-4-6",

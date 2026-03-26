@@ -699,6 +699,8 @@ export const runtimeConfigResponseSchema = z.object({
 	detectedCommands: z.array(z.string()),
 	agents: z.array(runtimeAgentDefinitionSchema),
 	shortcuts: z.array(runtimeProjectShortcutSchema),
+	autoStartTasksEnabled: z.boolean(),
+	maxConcurrentRunningTasks: z.number().int().positive(),
 	clineProviderSettings: runtimeClineProviderSettingsSchema,
 	commitPromptTemplate: z.string(),
 	openPrPromptTemplate: z.string(),
@@ -713,6 +715,8 @@ export const runtimeConfigSaveRequestSchema = z.object({
 	agentAutonomousModeEnabled: z.boolean().optional(),
 	shortcuts: z.array(runtimeProjectShortcutSchema).optional(),
 	readyForReviewNotificationsEnabled: z.boolean().optional(),
+	autoStartTasksEnabled: z.boolean().optional(),
+	maxConcurrentRunningTasks: z.number().int().positive().optional(),
 	commitPromptTemplate: z.string().optional(),
 	openPrPromptTemplate: z.string().optional(),
 });

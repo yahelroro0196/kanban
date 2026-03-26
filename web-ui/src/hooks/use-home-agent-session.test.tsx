@@ -95,6 +95,8 @@ function createRuntimeConfig(overrides: Partial<RuntimeConfigResponse> = {}): Ru
 			},
 		],
 		shortcuts: [],
+		autoStartTasksEnabled: false,
+		maxConcurrentRunningTasks: 2,
 		clineProviderSettings: {
 			providerId: "anthropic",
 			modelId: "claude-sonnet-4-6",

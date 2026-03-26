@@ -286,6 +286,8 @@ describe.sequential("runtime-config auto agent selection", () => {
 					agentAutonomousModeEnabled: true,
 					readyForReviewNotificationsEnabled: true,
 					shortcuts: [],
+					autoStartTasksEnabled: false,
+					maxConcurrentRunningTasks: 2,
 					commitPromptTemplate: current.commitPromptTemplateDefault,
 					openPrPromptTemplate: current.openPrPromptTemplateDefault,
 				});
@@ -329,6 +331,8 @@ describe.sequential("runtime-config auto agent selection", () => {
 					agentAutonomousModeEnabled: true,
 					readyForReviewNotificationsEnabled: true,
 					shortcuts: [],
+					autoStartTasksEnabled: false,
+					maxConcurrentRunningTasks: 2,
 					commitPromptTemplate: current.commitPromptTemplateDefault,
 					openPrPromptTemplate: current.openPrPromptTemplateDefault,
 				});
@@ -356,6 +360,8 @@ describe.sequential("runtime-config auto agent selection", () => {
 					agentAutonomousModeEnabled: true,
 					readyForReviewNotificationsEnabled: true,
 					shortcuts: [{ label: "Ship", command: "npm run ship", icon: "rocket" }],
+					autoStartTasksEnabled: false,
+					maxConcurrentRunningTasks: 2,
 					commitPromptTemplate: current.commitPromptTemplateDefault,
 					openPrPromptTemplate: current.openPrPromptTemplateDefault,
 				});
@@ -363,6 +369,81 @@ describe.sequential("runtime-config auto agent selection", () => {
 
 				await updateRuntimeConfig(tempProject, {
 					shortcuts: [],
+				});
+
+				expect(existsSync(join(tempProject, ".cline", "kanban", "config.json"))).toBe(false);
+			});
+		} finally {
+			cleanupProject();
+			cleanupHome();
+		}
+	});
+
+	it("loads default project auto-start settings when no project config exists", async () => {
+		const { path: tempHome, cleanup: cleanupHome } = createTempDir("kanban-home-runtime-config-auto-start-default-");
+		const { path: tempProject, cleanup: cleanupProject } = createTempDir(
+			"kanban-project-runtime-config-auto-start-default-",
+		);
+
+		try {
+			await withTemporaryEnv({ home: tempHome }, async () => {
+				const state = await loadRuntimeConfig(tempProject);
+				expect(state.autoStartTasksEnabled).toBe(false);
+				expect(state.maxConcurrentRunningTasks).toBe(2);
+			});
+		} finally {
+			cleanupProject();
+			cleanupHome();
+		}
+	});
+
+	it("persists non-default project auto-start settings", async () => {
+		const { path: tempHome, cleanup: cleanupHome } = createTempDir("kanban-home-runtime-config-auto-start-set-");
+		const { path: tempProject, cleanup: cleanupProject } = createTempDir(
+			"kanban-project-runtime-config-auto-start-set-",
+		);
+
+		try {
+			await withTemporaryEnv({ home: tempHome }, async () => {
+				const updated = await updateRuntimeConfig(tempProject, {
+					autoStartTasksEnabled: true,
+					maxConcurrentRunningTasks: 4,
+				});
+				expect(updated.autoStartTasksEnabled).toBe(true);
+				expect(updated.maxConcurrentRunningTasks).toBe(4);
+
+				const projectPayload = JSON.parse(
+					readFileSync(join(tempProject, ".cline", "kanban", "config.json"), "utf8"),
+				) as {
+					autoStartTasksEnabled?: boolean;
+					maxConcurrentRunningTasks?: number;
+				};
+				expect(projectPayload.autoStartTasksEnabled).toBe(true);
+				expect(projectPayload.maxConcurrentRunningTasks).toBe(4);
+			});
+		} finally {
+			cleanupProject();
+			cleanupHome();
+		}
+	});
+
+	it("removes the project config file when auto-start settings return to defaults and no other project settings remain", async () => {
+		const { path: tempHome, cleanup: cleanupHome } = createTempDir("kanban-home-runtime-config-auto-start-reset-");
+		const { path: tempProject, cleanup: cleanupProject } = createTempDir(
+			"kanban-project-runtime-config-auto-start-reset-",
+		);
+
+		try {
+			await withTemporaryEnv({ home: tempHome }, async () => {
+				await updateRuntimeConfig(tempProject, {
+					autoStartTasksEnabled: true,
+					maxConcurrentRunningTasks: 5,
+				});
+				expect(existsSync(join(tempProject, ".cline", "kanban", "config.json"))).toBe(true);
+
+				await updateRuntimeConfig(tempProject, {
+					autoStartTasksEnabled: false,
+					maxConcurrentRunningTasks: 2,
 				});
 
 				expect(existsSync(join(tempProject, ".cline", "kanban", "config.json"))).toBe(false);

@@ -24,6 +24,8 @@ interface RuntimeGlobalConfigFileShape {
 
 interface RuntimeProjectConfigFileShape {
 	shortcuts?: RuntimeProjectShortcut[];
+	autoStartTasksEnabled?: boolean;
+	maxConcurrentRunningTasks?: number;
 }
 
 export interface RuntimeConfigState {
@@ -34,6 +36,8 @@ export interface RuntimeConfigState {
 	agentAutonomousModeEnabled: boolean;
 	readyForReviewNotificationsEnabled: boolean;
 	shortcuts: RuntimeProjectShortcut[];
+	autoStartTasksEnabled: boolean;
+	maxConcurrentRunningTasks: number;
 	commitPromptTemplate: string;
 	openPrPromptTemplate: string;
 	commitPromptTemplateDefault: string;
@@ -46,6 +50,8 @@ export interface RuntimeConfigUpdateInput {
 	agentAutonomousModeEnabled?: boolean;
 	readyForReviewNotificationsEnabled?: boolean;
 	shortcuts?: RuntimeProjectShortcut[];
+	autoStartTasksEnabled?: boolean;
+	maxConcurrentRunningTasks?: number;
 	commitPromptTemplate?: string;
 	openPrPromptTemplate?: string;
 }
@@ -60,6 +66,8 @@ const DEFAULT_AGENT_ID: RuntimeAgentId = "cline";
 const AUTO_SELECT_AGENT_PRIORITY: readonly RuntimeAgentId[] = ["claude", "codex"];
 const DEFAULT_AGENT_AUTONOMOUS_MODE_ENABLED = true;
 const DEFAULT_READY_FOR_REVIEW_NOTIFICATIONS_ENABLED = true;
+const DEFAULT_AUTO_START_TASKS_ENABLED = false;
+const DEFAULT_MAX_CONCURRENT_RUNNING_TASKS = 2;
 const DEFAULT_COMMIT_PROMPT_TEMPLATE = `You are in a worktree on a detached HEAD. When you are finished with the task, commit the working changes onto {{base_ref}}.
 
 - Do not run destructive commands: git reset --hard, git clean -fdx, git worktree remove, rm/mv on repository paths.
@@ -185,6 +193,13 @@ function normalizeBoolean(value: unknown, fallback: boolean): boolean {
 	return fallback;
 }
 
+function normalizePositiveInteger(value: unknown, fallback: number): number {
+	if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
+		return fallback;
+	}
+	return value;
+}
+
 function normalizeShortcutLabel(value: unknown): string | null {
 	if (typeof value !== "string") {
 		return null;
@@ -284,6 +299,11 @@ function toRuntimeConfigState({
 			DEFAULT_READY_FOR_REVIEW_NOTIFICATIONS_ENABLED,
 		),
 		shortcuts: normalizeShortcuts(projectConfig?.shortcuts),
+		autoStartTasksEnabled: normalizeBoolean(projectConfig?.autoStartTasksEnabled, DEFAULT_AUTO_START_TASKS_ENABLED),
+		maxConcurrentRunningTasks: normalizePositiveInteger(
+			projectConfig?.maxConcurrentRunningTasks,
+			DEFAULT_MAX_CONCURRENT_RUNNING_TASKS,
+		),
 		commitPromptTemplate: normalizePromptTemplate(globalConfig?.commitPromptTemplate, DEFAULT_COMMIT_PROMPT_TEMPLATE),
 		openPrPromptTemplate: normalizePromptTemplate(
 			globalConfig?.openPrPromptTemplate,
@@ -382,16 +402,39 @@ async function writeRuntimeGlobalConfigFile(
 
 async function writeRuntimeProjectConfigFile(
 	configPath: string | null,
-	config: { shortcuts: RuntimeProjectShortcut[] },
+	config: {
+		shortcuts: RuntimeProjectShortcut[];
+		autoStartTasksEnabled: boolean;
+		maxConcurrentRunningTasks: number;
+	},
 ): Promise<void> {
 	const normalizedShortcuts = normalizeShortcuts(config.shortcuts);
+	const autoStartTasksEnabled = normalizeBoolean(config.autoStartTasksEnabled, DEFAULT_AUTO_START_TASKS_ENABLED);
+	const maxConcurrentRunningTasks = normalizePositiveInteger(
+		config.maxConcurrentRunningTasks,
+		DEFAULT_MAX_CONCURRENT_RUNNING_TASKS,
+	);
 	if (!configPath) {
-		if (normalizedShortcuts.length > 0) {
-			throw new Error("Cannot save project shortcuts without a selected project.");
+		if (
+			normalizedShortcuts.length > 0 ||
+			autoStartTasksEnabled !== DEFAULT_AUTO_START_TASKS_ENABLED ||
+			maxConcurrentRunningTasks !== DEFAULT_MAX_CONCURRENT_RUNNING_TASKS
+		) {
+			throw new Error("Cannot save project settings without a selected project.");
 		}
 		return;
 	}
-	if (normalizedShortcuts.length === 0) {
+	const payload: RuntimeProjectConfigFileShape = {};
+	if (normalizedShortcuts.length > 0) {
+		payload.shortcuts = normalizedShortcuts;
+	}
+	if (autoStartTasksEnabled !== DEFAULT_AUTO_START_TASKS_ENABLED) {
+		payload.autoStartTasksEnabled = autoStartTasksEnabled;
+	}
+	if (maxConcurrentRunningTasks !== DEFAULT_MAX_CONCURRENT_RUNNING_TASKS) {
+		payload.maxConcurrentRunningTasks = maxConcurrentRunningTasks;
+	}
+	if (Object.keys(payload).length === 0) {
 		await rm(configPath, { force: true });
 		try {
 			await rm(dirname(configPath));
@@ -402,9 +445,7 @@ async function writeRuntimeProjectConfigFile(
 	}
 	await lockedFileSystem.writeJsonFileAtomic(
 		configPath,
-		{
-			shortcuts: normalizedShortcuts,
-		} satisfies RuntimeProjectConfigFileShape,
+		payload satisfies RuntimeProjectConfigFileShape,
 		{
 			lock: null,
 		},
@@ -454,6 +495,8 @@ function createRuntimeConfigStateFromValues(input: {
 	agentAutonomousModeEnabled: boolean;
 	readyForReviewNotificationsEnabled: boolean;
 	shortcuts: RuntimeProjectShortcut[];
+	autoStartTasksEnabled: boolean;
+	maxConcurrentRunningTasks: number;
 	commitPromptTemplate: string;
 	openPrPromptTemplate: string;
 }): RuntimeConfigState {
@@ -471,6 +514,11 @@ function createRuntimeConfigStateFromValues(input: {
 			DEFAULT_READY_FOR_REVIEW_NOTIFICATIONS_ENABLED,
 		),
 		shortcuts: normalizeShortcuts(input.shortcuts),
+		autoStartTasksEnabled: normalizeBoolean(input.autoStartTasksEnabled, DEFAULT_AUTO_START_TASKS_ENABLED),
+		maxConcurrentRunningTasks: normalizePositiveInteger(
+			input.maxConcurrentRunningTasks,
+			DEFAULT_MAX_CONCURRENT_RUNNING_TASKS,
+		),
 		commitPromptTemplate: normalizePromptTemplate(input.commitPromptTemplate, DEFAULT_COMMIT_PROMPT_TEMPLATE),
 		openPrPromptTemplate: normalizePromptTemplate(input.openPrPromptTemplate, DEFAULT_OPEN_PR_PROMPT_TEMPLATE),
 		commitPromptTemplateDefault: DEFAULT_COMMIT_PROMPT_TEMPLATE,
@@ -487,6 +535,8 @@ export function toGlobalRuntimeConfigState(current: RuntimeConfigState): Runtime
 		agentAutonomousModeEnabled: current.agentAutonomousModeEnabled,
 		readyForReviewNotificationsEnabled: current.readyForReviewNotificationsEnabled,
 		shortcuts: [],
+		autoStartTasksEnabled: DEFAULT_AUTO_START_TASKS_ENABLED,
+		maxConcurrentRunningTasks: DEFAULT_MAX_CONCURRENT_RUNNING_TASKS,
 		commitPromptTemplate: current.commitPromptTemplate,
 		openPrPromptTemplate: current.openPrPromptTemplate,
 	});
@@ -522,11 +572,21 @@ export async function saveRuntimeConfig(
 		agentAutonomousModeEnabled: boolean;
 		readyForReviewNotificationsEnabled: boolean;
 		shortcuts: RuntimeProjectShortcut[];
+		autoStartTasksEnabled: boolean;
+		maxConcurrentRunningTasks: number;
 		commitPromptTemplate: string;
 		openPrPromptTemplate: string;
 	},
 ): Promise<RuntimeConfigState> {
 	const { globalConfigPath, projectConfigPath } = resolveRuntimeConfigPaths(cwd);
+	if (
+		projectConfigPath === null &&
+		(config.shortcuts.length > 0 ||
+			config.autoStartTasksEnabled !== DEFAULT_AUTO_START_TASKS_ENABLED ||
+			config.maxConcurrentRunningTasks !== DEFAULT_MAX_CONCURRENT_RUNNING_TASKS)
+	) {
+		throw new Error("Cannot save project settings without a selected project.");
+	}
 	return await lockedFileSystem.withLocks(getRuntimeConfigLockRequests(cwd), async () => {
 		await writeRuntimeGlobalConfigFile(globalConfigPath, {
 			selectedAgentId: config.selectedAgentId,
@@ -536,7 +596,11 @@ export async function saveRuntimeConfig(
 			commitPromptTemplate: config.commitPromptTemplate,
 			openPrPromptTemplate: config.openPrPromptTemplate,
 		});
-		await writeRuntimeProjectConfigFile(projectConfigPath, { shortcuts: config.shortcuts });
+		await writeRuntimeProjectConfigFile(projectConfigPath, {
+			shortcuts: config.shortcuts,
+			autoStartTasksEnabled: config.autoStartTasksEnabled,
+			maxConcurrentRunningTasks: config.maxConcurrentRunningTasks,
+		});
 		return createRuntimeConfigStateFromValues({
 			globalConfigPath,
 			projectConfigPath,
@@ -545,6 +609,8 @@ export async function saveRuntimeConfig(
 			agentAutonomousModeEnabled: config.agentAutonomousModeEnabled,
 			readyForReviewNotificationsEnabled: config.readyForReviewNotificationsEnabled,
 			shortcuts: config.shortcuts,
+			autoStartTasksEnabled: config.autoStartTasksEnabled,
+			maxConcurrentRunningTasks: config.maxConcurrentRunningTasks,
 			commitPromptTemplate: config.commitPromptTemplate,
 			openPrPromptTemplate: config.openPrPromptTemplate,
 		});
@@ -555,8 +621,19 @@ export async function updateRuntimeConfig(cwd: string, updates: RuntimeConfigUpd
 	const { globalConfigPath, projectConfigPath } = resolveRuntimeConfigPaths(cwd);
 	return await lockedFileSystem.withLocks(getRuntimeConfigLockRequests(cwd), async () => {
 		const current = await loadRuntimeConfigLocked(cwd);
-		if (projectConfigPath === null && normalizeShortcuts(updates.shortcuts).length > 0) {
-			throw new Error("Cannot save project shortcuts without a selected project.");
+		if (
+			projectConfigPath === null &&
+			(normalizeShortcuts(updates.shortcuts).length > 0 ||
+				(updates.autoStartTasksEnabled !== undefined &&
+					normalizeBoolean(updates.autoStartTasksEnabled, DEFAULT_AUTO_START_TASKS_ENABLED) !==
+						DEFAULT_AUTO_START_TASKS_ENABLED) ||
+				(updates.maxConcurrentRunningTasks !== undefined &&
+					normalizePositiveInteger(
+						updates.maxConcurrentRunningTasks,
+						DEFAULT_MAX_CONCURRENT_RUNNING_TASKS,
+					) !== DEFAULT_MAX_CONCURRENT_RUNNING_TASKS))
+		) {
+			throw new Error("Cannot save project settings without a selected project.");
 		}
 		const nextConfig = {
 			selectedAgentId: updates.selectedAgentId ?? current.selectedAgentId,
@@ -566,6 +643,12 @@ export async function updateRuntimeConfig(cwd: string, updates: RuntimeConfigUpd
 			readyForReviewNotificationsEnabled:
 				updates.readyForReviewNotificationsEnabled ?? current.readyForReviewNotificationsEnabled,
 			shortcuts: projectConfigPath ? (updates.shortcuts ?? current.shortcuts) : current.shortcuts,
+			autoStartTasksEnabled: projectConfigPath
+				? (updates.autoStartTasksEnabled ?? current.autoStartTasksEnabled)
+				: current.autoStartTasksEnabled,
+			maxConcurrentRunningTasks: projectConfigPath
+				? (updates.maxConcurrentRunningTasks ?? current.maxConcurrentRunningTasks)
+				: current.maxConcurrentRunningTasks,
 			commitPromptTemplate: updates.commitPromptTemplate ?? current.commitPromptTemplate,
 			openPrPromptTemplate: updates.openPrPromptTemplate ?? current.openPrPromptTemplate,
 		};
@@ -575,6 +658,8 @@ export async function updateRuntimeConfig(cwd: string, updates: RuntimeConfigUpd
 			nextConfig.selectedShortcutLabel !== current.selectedShortcutLabel ||
 			nextConfig.agentAutonomousModeEnabled !== current.agentAutonomousModeEnabled ||
 			nextConfig.readyForReviewNotificationsEnabled !== current.readyForReviewNotificationsEnabled ||
+			nextConfig.autoStartTasksEnabled !== current.autoStartTasksEnabled ||
+			nextConfig.maxConcurrentRunningTasks !== current.maxConcurrentRunningTasks ||
 			nextConfig.commitPromptTemplate !== current.commitPromptTemplate ||
 			nextConfig.openPrPromptTemplate !== current.openPrPromptTemplate ||
 			!areRuntimeProjectShortcutsEqual(nextConfig.shortcuts, current.shortcuts);
@@ -593,6 +678,8 @@ export async function updateRuntimeConfig(cwd: string, updates: RuntimeConfigUpd
 		});
 		await writeRuntimeProjectConfigFile(projectConfigPath, {
 			shortcuts: nextConfig.shortcuts,
+			autoStartTasksEnabled: nextConfig.autoStartTasksEnabled,
+			maxConcurrentRunningTasks: nextConfig.maxConcurrentRunningTasks,
 		});
 		return createRuntimeConfigStateFromValues({
 			globalConfigPath,
@@ -602,6 +689,8 @@ export async function updateRuntimeConfig(cwd: string, updates: RuntimeConfigUpd
 			agentAutonomousModeEnabled: nextConfig.agentAutonomousModeEnabled,
 			readyForReviewNotificationsEnabled: nextConfig.readyForReviewNotificationsEnabled,
 			shortcuts: nextConfig.shortcuts,
+			autoStartTasksEnabled: nextConfig.autoStartTasksEnabled,
+			maxConcurrentRunningTasks: nextConfig.maxConcurrentRunningTasks,
 			commitPromptTemplate: nextConfig.commitPromptTemplate,
 			openPrPromptTemplate: nextConfig.openPrPromptTemplate,
 		});
@@ -629,6 +718,8 @@ export async function updateGlobalRuntimeConfig(
 				readyForReviewNotificationsEnabled:
 					updates.readyForReviewNotificationsEnabled ?? current.readyForReviewNotificationsEnabled,
 				shortcuts: current.shortcuts,
+				autoStartTasksEnabled: DEFAULT_AUTO_START_TASKS_ENABLED,
+				maxConcurrentRunningTasks: DEFAULT_MAX_CONCURRENT_RUNNING_TASKS,
 				commitPromptTemplate: updates.commitPromptTemplate ?? current.commitPromptTemplate,
 				openPrPromptTemplate: updates.openPrPromptTemplate ?? current.openPrPromptTemplate,
 			};
@@ -662,6 +753,8 @@ export async function updateGlobalRuntimeConfig(
 				agentAutonomousModeEnabled: nextConfig.agentAutonomousModeEnabled,
 				readyForReviewNotificationsEnabled: nextConfig.readyForReviewNotificationsEnabled,
 				shortcuts: nextConfig.shortcuts,
+				autoStartTasksEnabled: nextConfig.autoStartTasksEnabled,
+				maxConcurrentRunningTasks: nextConfig.maxConcurrentRunningTasks,
 				commitPromptTemplate: nextConfig.commitPromptTemplate,
 				openPrPromptTemplate: nextConfig.openPrPromptTemplate,
 			});

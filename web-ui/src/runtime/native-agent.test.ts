@@ -44,6 +44,8 @@ function createRuntimeConfigResponse(
 			},
 		],
 		shortcuts: [],
+		autoStartTasksEnabled: false,
+		maxConcurrentRunningTasks: 2,
 		clineProviderSettings: {
 			providerId: "cline",
 			modelId: "sonnet",

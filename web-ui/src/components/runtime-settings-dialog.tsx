@@ -65,6 +65,18 @@ function normalizeTemplateForComparison(value: string): string {
 	return value.replaceAll("\r\n", "\n").trim();
 }
 
+function parseMaxConcurrentRunningTasksInput(value: string): number | null {
+	const trimmed = value.trim();
+	if (!/^\d+$/.test(trimmed)) {
+		return null;
+	}
+	const parsed = Number(trimmed);
+	if (!Number.isSafeInteger(parsed) || parsed < 1) {
+		return null;
+	}
+	return parsed;
+}
+
 const GIT_PROMPT_VARIANT_OPTIONS: Array<{ value: TaskGitAction; label: string }> = [
 	{ value: "commit", label: "Commit" },
 	{ value: "pr", label: "Make PR" },
@@ -301,6 +313,8 @@ export function RuntimeSettingsDialog({
 	const [readyForReviewNotificationsEnabled, setReadyForReviewNotificationsEnabled] = useState(true);
 	const [notificationPermission, setNotificationPermission] = useState<BrowserNotificationPermission>("unsupported");
 	const [shortcuts, setShortcuts] = useState<RuntimeProjectShortcut[]>([]);
+	const [autoStartTasksEnabled, setAutoStartTasksEnabled] = useState(false);
+	const [maxConcurrentRunningTasksInput, setMaxConcurrentRunningTasksInput] = useState("2");
 	const [commitPromptTemplate, setCommitPromptTemplate] = useState("");
 	const [openPrPromptTemplate, setOpenPrPromptTemplate] = useState("");
 	const [selectedPromptVariant, setSelectedPromptVariant] = useState<TaskGitAction>("commit");
@@ -313,6 +327,8 @@ export function RuntimeSettingsDialog({
 	const controlsDisabled = isLoading || isSaving || config === null;
 	const commitPromptTemplateDefault = config?.commitPromptTemplateDefault ?? "";
 	const openPrPromptTemplateDefault = config?.openPrPromptTemplateDefault ?? "";
+	const parsedMaxConcurrentRunningTasks = parseMaxConcurrentRunningTasksInput(maxConcurrentRunningTasksInput);
+	const hasValidMaxConcurrentRunningTasks = parsedMaxConcurrentRunningTasks !== null;
 	const isCommitPromptAtDefault =
 		normalizeTemplateForComparison(commitPromptTemplate) ===
 		normalizeTemplateForComparison(commitPromptTemplateDefault);
@@ -364,6 +380,8 @@ export function RuntimeSettingsDialog({
 	const initialAgentAutonomousModeEnabled = config?.agentAutonomousModeEnabled ?? true;
 	const initialReadyForReviewNotificationsEnabled = config?.readyForReviewNotificationsEnabled ?? true;
 	const initialShortcuts = config?.shortcuts ?? [];
+	const initialAutoStartTasksEnabled = config?.autoStartTasksEnabled ?? false;
+	const initialMaxConcurrentRunningTasks = config?.maxConcurrentRunningTasks ?? 2;
 	const initialCommitPromptTemplate = config?.commitPromptTemplate ?? "";
 	const initialOpenPrPromptTemplate = config?.openPrPromptTemplate ?? "";
 	const clineSettings = useRuntimeSettingsClineController({
@@ -391,6 +409,12 @@ export function RuntimeSettingsDialog({
 		if (readyForReviewNotificationsEnabled !== initialReadyForReviewNotificationsEnabled) {
 			return true;
 		}
+		if (autoStartTasksEnabled !== initialAutoStartTasksEnabled) {
+			return true;
+		}
+		if (parsedMaxConcurrentRunningTasks !== initialMaxConcurrentRunningTasks) {
+			return true;
+		}
 		if (clineSettings.hasUnsavedChanges) {
 			return true;
 		}
@@ -411,18 +435,22 @@ export function RuntimeSettingsDialog({
 			normalizeTemplateForComparison(initialOpenPrPromptTemplate)
 		);
 	}, [
+		autoStartTasksEnabled,
 		agentAutonomousModeEnabled,
 		clineMcpSettings.hasUnsavedChanges,
 		clineSettings.hasUnsavedChanges,
 		commitPromptTemplate,
 		config,
 		initialAgentAutonomousModeEnabled,
+		initialAutoStartTasksEnabled,
 		initialCommitPromptTemplate,
+		initialMaxConcurrentRunningTasks,
 		initialOpenPrPromptTemplate,
 		initialReadyForReviewNotificationsEnabled,
 		initialSelectedAgentId,
 		initialShortcuts,
 		openPrPromptTemplate,
+		parsedMaxConcurrentRunningTasks,
 		readyForReviewNotificationsEnabled,
 		selectedAgentId,
 		shortcuts,
@@ -436,12 +464,16 @@ export function RuntimeSettingsDialog({
 		setAgentAutonomousModeEnabled(config?.agentAutonomousModeEnabled ?? true);
 		setReadyForReviewNotificationsEnabled(config?.readyForReviewNotificationsEnabled ?? true);
 		setShortcuts(config?.shortcuts ?? []);
+		setAutoStartTasksEnabled(config?.autoStartTasksEnabled ?? false);
+		setMaxConcurrentRunningTasksInput(String(config?.maxConcurrentRunningTasks ?? 2));
 		setCommitPromptTemplate(config?.commitPromptTemplate ?? "");
 		setOpenPrPromptTemplate(config?.openPrPromptTemplate ?? "");
 		setSaveError(null);
 	}, [
+		config?.autoStartTasksEnabled,
 		config?.agentAutonomousModeEnabled,
 		config?.commitPromptTemplate,
+		config?.maxConcurrentRunningTasks,
 		config?.openPrPromptTemplate,
 		config?.readyForReviewNotificationsEnabled,
 		config?.selectedAgentId,
@@ -548,6 +580,10 @@ export function RuntimeSettingsDialog({
 			setSaveError("Choose a Cline provider before saving.");
 			return;
 		}
+		if (parsedMaxConcurrentRunningTasks === null) {
+			setSaveError("Max concurrent running tasks must be a whole number greater than or equal to 1.");
+			return;
+		}
 		if (selectedAgentId === "cline") {
 			const clineProviderSaveResult = await clineSettings.saveProviderSettings();
 			if (!clineProviderSaveResult.ok) {
@@ -565,6 +601,8 @@ export function RuntimeSettingsDialog({
 			agentAutonomousModeEnabled,
 			readyForReviewNotificationsEnabled,
 			shortcuts,
+			autoStartTasksEnabled,
+			maxConcurrentRunningTasks: parsedMaxConcurrentRunningTasks,
 			commitPromptTemplate,
 			openPrPromptTemplate,
 		});
@@ -749,6 +787,40 @@ export function RuntimeSettingsDialog({
 					{config?.projectConfigPath ? formatPathForDisplay(config.projectConfigPath) : "<project>/.cline/kanban/config.json"}
 					{config?.projectConfigPath ? <ExternalLink size={12} className="inline ml-1.5 align-middle" /> : null}
 				</p>
+				<h6 className="font-semibold text-text-primary mt-3 mb-2">Task auto-start</h6>
+				<div className="flex items-center gap-2">
+					<RadixSwitch.Root
+						checked={autoStartTasksEnabled}
+						disabled={controlsDisabled || config?.projectConfigPath === null}
+						onCheckedChange={setAutoStartTasksEnabled}
+						className="relative h-5 w-9 rounded-full bg-surface-4 data-[state=checked]:bg-accent cursor-pointer disabled:opacity-40"
+					>
+						<RadixSwitch.Thumb className="block h-4 w-4 rounded-full bg-white shadow-sm transition-transform translate-x-0.5 data-[state=checked]:translate-x-[18px]" />
+					</RadixSwitch.Root>
+					<span className="text-[13px] text-text-primary">Auto-start tasks when capacity is available</span>
+				</div>
+				<div className="mt-2">
+					<label className="text-[11px] text-text-secondary block mb-1">Max concurrent running tasks</label>
+					<input
+						type="number"
+						min={1}
+						step={1}
+						inputMode="numeric"
+						value={maxConcurrentRunningTasksInput}
+						onChange={(event) => setMaxConcurrentRunningTasksInput(event.target.value)}
+						disabled={controlsDisabled || config?.projectConfigPath === null}
+						className={cn(
+							"h-8 w-28 rounded-md border bg-surface-2 px-2 text-[13px] text-text-primary focus:outline-none",
+							hasValidMaxConcurrentRunningTasks ? "border-border focus:border-border-focus" : "border-status-red",
+						)}
+					/>
+					<p className="text-text-secondary text-[13px] mt-1 mb-0">
+						Automatic starts stop once this project has this many running tasks. Manual starts are not capped.
+					</p>
+					{!hasValidMaxConcurrentRunningTasks ? (
+						<p className="text-status-red text-[12px] mt-1 mb-0">Enter a whole number greater than or equal to 1.</p>
+					) : null}
+				</div>
 
 				<div className="flex items-center justify-between mt-3 mb-2">
 					<h6 ref={shortcutsSectionRef} className="font-semibold text-text-primary m-0">
@@ -847,7 +919,7 @@ export function RuntimeSettingsDialog({
 				<Button
 					variant="primary"
 					onClick={() => void handleSave()}
-					disabled={controlsDisabled || !hasUnsavedChanges}
+					disabled={controlsDisabled || !hasUnsavedChanges || !hasValidMaxConcurrentRunningTasks}
 				>
 					Save
 				</Button>
